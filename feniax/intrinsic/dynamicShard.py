@@ -12,7 +12,7 @@ import feniax.intrinsic.dq_dynamic as dq_dynamic
 import feniax.preprocessor.containers.intrinsicmodal as intrinsicmodal
 
 
-@partial(jax.jit, static_argnames=["config"])
+# @partial(jax.jit, static_argnames=["config"])
 def main_20g21_3(
     inputs,  # 
     q0,
@@ -22,7 +22,7 @@ def main_20g21_3(
 ):
 
     X = config.fem.X
-    phi1l, phi2l, psi2l, X_xdelta, C0ab, A, D, c_ref,  _dqargs = args
+    phi1l, phi2l, psi2l, X_xdelta, C0ab, A, D, c_ref, _dqargs = args
     states = _dqargs[4]
     q1_index = states["q1"]
     q2_index = states["q2"]
@@ -152,7 +152,7 @@ def main_20g21_3(
     results = main_vmap(inputs)
     return results
 
-@partial(jax.jit, static_argnames=["config"])
+# @partial(jax.jit, static_argnames=["config"])
 def main_20g546_3(
     inputs,  # 
     q0,

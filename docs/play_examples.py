@@ -37,6 +37,46 @@ f = jax.vmap(lambda u, v: jnp.matmul(v, u.T), in_axes=(0,1), out_axes=1)
 u = jnp.array([jnp.eye(6) for i in range(3)])
 v = jnp.arange(4*6*3).reshape((4, 3, 6))
 fuv = f(u, v)
+########################################
+# passing functions
+
+import jax
+from jax import Array, jit, numpy as jnp
+from typing import Callable
+
+def func(a: Array, arg: int) -> Array:
+  return a + arg
+
+@jit
+def myjittedfun(f: Callable, a) -> Array:
+   return f(a)
+
+closure = jax.tree_util.Partial(func, arg=1)
+a = jnp.array([3, 4])
+print(myjittedfun(closure, a))
+# [4 5]
+
+from jax import Array, jit, numpy as jnp
+import jax_dataclasses as jdc
+
+
+@jdc.pytree_dataclass
+class MyClosure:
+    closure_arg1: int
+
+    def __call__(self, a:Array) -> Array:
+        return a + self.closure_arg1
+
+@jit
+def myjittedfun(closure: MyClosure):
+   a = jnp.array([3, 4])
+   return closure(a)
+
+def main():
+   closure = MyClosure(closure_arg1=3)
+   print(myjittedfun(closure))
+
+
 
 ##########################################
 
@@ -645,3 +685,374 @@ instance = MyClass(attr1=10, attr2="example")
 # Print the extracted attributes
 for attribute in MyClass.attributes:
     print(attribute)
+
+##########################
+
+import os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8' # Use 8 CPU devices
+
+import jax
+import jax.numpy as jnp
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
+
+# Create a Sharding object to distribute a value across devices:
+mesh = Mesh(devices=mesh_utils.create_device_mesh((4, 2)),
+            axis_names=('x', 'y'))
+
+# Create an array of random values:
+x = jax.random.normal(jax.random.key(0), (8192, 8192))
+# and use jax.device_put to distribute it across devices:
+y = jax.device_put(x, NamedSharding(mesh, P('x', 'y')))
+jax.debug.visualize_array_sharding(y)
+
+
+@jax.jit
+def f(x):
+
+    # y = jnp.ones((2, 3))
+    y = x * 2 #y.at[0, 2].set(x*2)
+    dy = dict(x=x, y=y)
+    return dy
+
+@jax.jit
+def fshard(x):
+
+    fvmap = jax.vmap(f)
+    y = fvmap(x)
+    return y
+
+mesh = Mesh(devices=mesh_utils.create_device_mesh((8,)),
+            axis_names=('x'))
+
+# Create an array of random values:
+x = jax.random.normal(jax.random.key(0), (80,2,3))
+# and use jax.device_put to distribute it across devices:
+xshard = jax.device_put(x, NamedSharding(mesh, P('x')))
+
+y = fshard(xshard)
+jax.debug.visualize_array_sharding(y[:,0])
+
+#print(y)
+
+#################################
+
+import jax
+from jax import jit
+from functools import partial
+
+
+def inner_function(x, static_val):
+    # The behavior of `static_val` in JIT context depends on how it was passed
+    return x + static_val
+
+def outer_function(x, static_val):
+    return inner_function(x, static_val)
+
+# JIT-compile the outer function where the second argument is treated as static
+compiled_function = jit(outer_function, static_argnums=(1,))
+
+# Call the compiled function with a static argument
+result = compiled_function(3, 10)
+print(result)  # Expected to print 13
+
+#############################################################
+
+
+from functools import partial
+
+import jax
+import jax.numpy as jnp
+
+from jax.sharding import Mesh, PartitionSpec as P
+from jax.experimental.shard_map import shard_map
+jax.config.update("jax_enable_x64", True)
+    
+import os
+os.environ["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={8}"
+
+mesh = jax.make_mesh((4, 2), ('x', 'y'))
+
+a = jnp.arange( 8 * 16.).reshape(8, 16)
+b = jnp.arange(16 *  4.).reshape(16, 4)
+
+@partial(shard_map, mesh=mesh, in_specs=(P('x', 'y'), P('y', None)),
+         out_specs=P('x'))
+def matmul_basic(a_block, b_block):
+  # a_block: f32[2, 8]
+  # b_block: f32[8, 4]
+  c_partialsum = jnp.dot(a_block, b_block)
+  c_block = jax.lax.psum(c_partialsum, 'y')
+  # c_block: f32[2, 4]
+  #return c_block  
+  return jnp.broadcast_to(c_block.reshape(c_block.shape + (1,)), c_block.shape + (3,))
+
+c = matmul_basic(a, b)   # c: f32[8, 4]
+
+from jax.tree_util import tree_map, tree_all
+
+def allclose(a, b):
+  return tree_all(tree_map(partial(jnp.allclose, atol=1e-2, rtol=1e-2), a, b))
+
+allclose(c[:,:,2], jnp.dot(a, b))
+
+
+import os
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+
+import jax
+import jax.numpy as jnp
+from jax.experimental.shard_map import shard_map
+from jax.sharding import PartitionSpec as P
+
+print(jax.__version__, jax.devices())
+
+mesh = jax.make_mesh((2,), ('i',))
+x = jnp.arange(4., dtype=jnp.float32)
+y = jnp.arange(8.*3, dtype=jnp.float32).reshape((8,3))
+z = jnp.arange(8.*3*2, dtype=jnp.float32).reshape((8,3,2))
+ 
+
+f = shard_map(lambda x: jax.lax.pmax(x, 'i'),
+              mesh=mesh, in_specs=P('i'), out_specs=P(None))
+f(x)
+
+fy = shard_map(lambda x: jax.lax.pmax(jnp.max(x,axis=1), 'i'),
+              mesh=mesh, in_specs=P('i'), out_specs=P('i'))
+fy(y)
+fy(z)
+
+
+fy2 = shard_map(lambda x: jnp.max(x,axis=1), mesh=mesh, in_specs=P('i'), out_specs=P('i'))
+fy2(y)
+
+fy3 = shard_map(lambda x: jax.lax.pmax(x,"i"), mesh=mesh, in_specs=P('i'), out_specs=P(None))
+fy3(y)
+
+def dfy(inputs):
+
+    fy = shard_map(lambda x: 2*jax.lax.pmax(jnp.max(x**2,axis=1), 'i'),
+                   mesh=mesh, in_specs=P('i'), out_specs=P())
+    out = jnp.max(fy(inputs), axis=0)
+    return out, fy(inputs)
+
+d, fd = jax.jacrev(dfy)(y)
+
+def dfy(inputs):
+
+    fy = shard_map(lambda x: 2*jax.lax.pmean(jnp.max(x**2,axis=1), 'i'),
+                   mesh=mesh, in_specs=P('i'), out_specs=P())
+    out = jnp.max(fy(inputs), axis=0)
+    return out, fy(inputs)
+
+d, fd = jax.jacrev(dfy)(y)
+
+
+
+def dfy(inputs):
+
+    fy = shard_map(lambda x: 2*jnp.max(x**2,axis=1),
+                   mesh=mesh, in_specs=P('i'), out_specs=P('i'))
+    out = jnp.max(fy(inputs), axis=0)
+    return out, fy(inputs)
+
+d, fd = jax.jacrev(dfy)(y)
+
+#########################################################################
+
+import os
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+
+import jax
+import jax.numpy as jnp
+from jax.experimental.shard_map import shard_map
+from jax.sharding import PartitionSpec as P
+from functools import partial
+
+print(jax.__version__, jax.devices())
+
+mesh = jax.make_mesh((2,), ('i',))
+x = jnp.arange(4., dtype=jnp.float32)
+y = jnp.arange(8.*3, dtype=jnp.float32).reshape((8,3))
+z = jnp.arange(8.*3*2, dtype=jnp.float32).reshape((8,3,2))
+ 
+
+def dfy(inputs_ad, inputs_shard):
+
+    args1 = 2 * inputs_ad
+    def f(y, args):
+        
+        x2 = args ** 2 + y
+        return jnp.max(x2)
+    
+    fvmap = jax.vmap(f)
+    
+    @partial(shard_map, mesh=mesh, in_specs=P('i'), out_specs=(P(), P('i')),
+             #check_rep=False
+             )
+    def fshard(inputs):
+
+        outputs = fvmap(args1, inputs)
+        return jax.lax.pmean(outputs, axis_name="i"), outputs
+
+    obj, out = fshard(inputs_shard)
+    return obj, out
+
+obj, out = dfy(x, y)
+
+d = jax.jacrev(dfy, has_aux=True)
+d(x,y)
+
+
+##########################################################################
+## Inheritance
+
+class A:
+    def method(self):
+        print("A method")
+
+
+class B(A):
+    def method(self):
+        print("B method")
+        super().method()  # This will call E's method
+
+class C(A):
+    def method(self):
+        print("C method")
+
+class D(B, C):
+    pass
+
+d = D()
+d.method()
+D.__mro__
+
+
+class A:
+    def method(self):
+        print("A method")
+
+class E:
+    def method(self):
+        print("E method")
+
+class B(E, A):
+    def method(self):
+        print("B method")
+        super().method()  # This will call E's method
+
+class C(A):
+    def method(self):
+        print("C method")
+
+class D(B, C):
+    pass
+
+
+d = D()
+d.method()
+D.__mro__
+
+
+class A:
+    def method(self):
+        print("A method")
+
+class E(A):
+    def method(self):
+        print("E method")
+
+class B(E):
+    def method(self):
+        print("B method")
+        super().method()  # This will call E's method
+
+class C(A):
+    def method(self):
+        print("C method")
+
+class D(B, C):
+    pass
+
+
+d = D()
+d.method()
+D.__mro__
+
+
+##################################################
+
+
+import os
+os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=1'
+from functools import partial
+import jax.numpy as jnp
+from jax.sharding import Mesh, PartitionSpec as P
+from jax.experimental import mesh_utils
+from jax.experimental.shard_map import shard_map
+
+devices = mesh_utils.create_device_mesh((1, ))
+mesh = Mesh(devices, axis_names=('i',))
+
+a = jnp.array(1).reshape(1, 1)
+b = jnp.array(1).reshape(1)
+
+@partial(shard_map, mesh=mesh, in_specs=P('i'), out_specs=P('i'))
+def f(a, b):
+  c = jnp.linalg.solve(a, b)
+  return c
+
+c = f(a, b)
+print(c)
+
+##########################################################
+
+import jax
+import jax.numpy as jnp
+
+@jax.jit
+def f(x):
+    y = jnp.linalg.inv(jnp.eye(len(x)) - x)
+    return y
+
+x = jnp.array([[1,2], [3, 4]])
+y = f(x)
+###########################################################
+
+import jax
+import jax.numpy as jnp
+import os
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+
+# Number of devices (e.g., 4 if you have 4 GPUs)
+num_devices = jax.device_count()
+
+# Total input size (e.g., 32 samples)
+N = 32*3
+N2 = int(N/6)
+data = jnp.arange(N).reshape((N2,2,3))
+
+# Let's assume we want to batch the input so each device gets 8 samples
+assert N2 % num_devices == 0
+batch_per_device = N2 // num_devices
+
+# Reshape into [num_devices, batch_per_device]
+x_sharded = data.reshape((num_devices, batch_per_device)+ data.shape[1:])
+
+# Dummy function to apply to each element
+def process_fn(x):
+    return x ** 2
+
+# Vectorize over batch_per_device
+def per_device_fn(batch):
+    return jax.vmap(process_fn)(batch)
+
+# Apply per_device_fn across all available devices in parallel
+parallel_fn = jax.pmap(per_device_fn)
+
+# Run
+out = parallel_fn(x_sharded)
+print(out.reshape((N2,2,3)))  # Reshape to get back [N] shape
+
+

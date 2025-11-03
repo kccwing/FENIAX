@@ -4,24 +4,48 @@ __DRIVER_DICT__ = dict()
 
 
 class Driver(ABC):
+    """ Initialises the main objects of the program and triggers the simulation
+
+    """
+    @abstractmethod
+    def _set_simulation(self):
+        """Initialise the simulation object
+        
+        """
+        pass
+    
+    @abstractmethod
+    def _set_systems(self):
+        """Initialise the system of equations objects
+        
+        """
+        pass
+    
+    @abstractmethod
+    def pre_simulation(self):
+        """Run any computation pre-simulation
+
+        """
+        
+        pass
+    
+    @abstractmethod
     def run_cases(self):
-        self.set_case()
-        self.set_integration()
-        self.set_simulation()
-        # Perform other operations using the configured case, integration, and simulation
-
-    def set_case(self):
-        # Configure the case
+        """Trigger the simulations
+        
+        """
         pass
 
-    def set_integration(self):
-        # Configure the integration
-        pass
+    @abstractmethod
+    def post_simulation(self):
+        """Run any computation post-simulation
 
-    def set_simulation(self):
-        # Configure the simulation
-        pass
+        For instance the forager pattern that launches other programs
 
+        """
+        
+        pass
+    
     def __init_subclass__(cls, **kwargs):
         assert "cls_name" in kwargs
         super().__init_subclass__()

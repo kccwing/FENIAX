@@ -7,17 +7,37 @@ def pytest_addoption(parser):
     parser.addoption(
         "--runslow", action="store_true", default=False, help="run slow tests"
     )
+    parser.addoption(
+        "--runprivate", action="store_true", default=False, help="run proprietary tests"
+    )
+    parser.addoption(
+        "--runlegacy", action="store_true", default=False, help="run legacy tests"
+    )
+    parser.addoption(
+        "--runall", action="store_true", default=False, help="run all tests"
+    )
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: mark test as slow to run")
+    config.addinivalue_line("markers", "private: mark test as non-opensource")
+    config.addinivalue_line("markers", "legacy: run legacy tests")    
+    config.addinivalue_line("markers", "all: run all tests")
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption("--runslow"):
-        # --runslow given in cli: do not skip slow tests
-        return
-    skip_slow = pytest.mark.skip(reason="need --runslow option to run")
-    for item in items:
-        if "slow" in item.keywords:
-            item.add_marker(skip_slow)
+    if not config.getoption("--runslow") and not config.getoption("--runall"):
+        skip_slow = pytest.mark.skip(reason="need --runslow option to run")
+        for item in items:
+            if "slow" in item.keywords:
+                item.add_marker(skip_slow)
+    if not config.getoption("--runlegacy") and not config.getoption("--runall"):
+        skip_legacy = pytest.mark.skip(reason="need --runlegacy option to run")
+        for item in items:
+            if "legacy" in item.keywords:
+                item.add_marker(skip_legacy)
+    if not config.getoption("--runprivate") and not config.getoption("--runall"):
+        skip_private = pytest.mark.skip(reason="need --runprivate option to run")    
+        for item in items:
+            if "private" in item.keywords:
+                item.add_marker(skip_private)        

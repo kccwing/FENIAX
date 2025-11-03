@@ -10,8 +10,18 @@ class DataContainer:
     #         cls._initialize_attributes()
     #     return super().__new__(cls)
 
+    def set_value(self, name, value):
+        object.__setattr__(self, name, value)
+
+    def delete_value(self, name):
+        if hasattr(self, name):
+            object.__delattr__(self, name)
+        
     @classmethod
     def _initialize_attributes(cls):
+        """
+        Parses the docstring of the class and places the description to the dictionary attributes
+        """
         docstring = cls.__doc__
         attributes = {}
         in_attributes_section = False

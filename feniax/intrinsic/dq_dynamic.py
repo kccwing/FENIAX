@@ -84,6 +84,48 @@ def dq_20g121(t, q, *args):
     F = _dq_20g121(t, q1i, q2i)
     return F
 
+def dq_20g2(t, q, *args):
+    """Free structural dynamic no external forces."""
+
+    (eta_0, gamma1, gamma2, omega, phi1l, states) = args[0]
+
+    q1 = q[states["q1"]]
+    q2 = q[states["q2"]]
+    qr = q[states["qr"]]    
+    F1, F2 = common.f_12(omega, gamma1, gamma2, q1, q2)
+    F1 += eta_0
+    Fr = common.f_quaternion(phi1l, q1, qr)
+    F = jnp.hstack([F1, F2, Fr])
+    return F
+
+def dq_20g2l(t, q, *args):
+    """Free structural dynamic no external forces. Linear"""
+
+    (eta_0, omega, phi1l, states) = args[0]
+
+    q1 = q[states["q1"]]
+    q2 = q[states["q2"]]
+    qr = q[states["qr"]]    
+    F1, F2 = common.f_12l(omega, q1, q2)
+    F1 += eta_0
+    Fr = common.f_quaternion(phi1l, q1, qr)
+    F = jnp.hstack([F1, F2, Fr])
+    return F
+
+def dq_20g2gamma1(t, q, *args):
+    """Free structural dynamic no external forces."""
+
+    (eta_0, gamma1, omega, phi1l, states) = args[0]
+
+    q1 = q[states["q1"]]
+    q2 = q[states["q2"]]
+    qr = q[states["qr"]]
+    F1, F2 = common.f_12gamma1(omega, gamma1, q1, q2)
+    F1 += eta_0
+    Fr = common.f_quaternion(phi1l, q1, qr)
+    F = jnp.hstack([F1, F2, Fr])
+    return F
+
 
 def dq_20g22(t, q, *args):
     """Free structural dynamic follower point forces."""
@@ -196,7 +238,7 @@ def dq_20g242(t, q, *args):
 # @jax.jit
 # @partial(jax.jit, static_argnames=['q'])
 def dq_20g21(t, q, *args):
-    """Gust response."""
+    """Gust response, clamped model"""
 
     (
         eta_0,
@@ -247,6 +289,7 @@ def dq_20g21(t, q, *args):
     Flgust = xloads.lags_rogergust(t, xgust, Flgust)  # NlxNm
     # jax.debug.breakpoint()
     Fl += Flgust
+    # jax.debug.print("eta_gust {eta_gust}", eta_gust=xgust)
     # Fl = Fl_tensor.reshape(num_modes * num_poles
     return jnp.hstack([F1, F2, Fl])
 

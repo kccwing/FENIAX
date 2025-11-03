@@ -1,6 +1,9 @@
 import jax.numpy as jnp
 
 from feniax.simulations.simulation import Simulation
+from feniax.ulogger.setup import  get_logger
+
+logger = get_logger(__name__)
 
 
 class SerialSimulation(Simulation, cls_name="serial"):
@@ -10,10 +13,10 @@ class SerialSimulation(Simulation, cls_name="serial"):
 
     def _run_systems(self):
         # Implement _run for SerialSimulation
-
         sys0 = None
         eta0 = None
         for k, sys in self.systems.items():  # only one item in the loop
+            logger.info(f"Running System {k}")
             sys.set_system()
             sys.set_solver()
             sys.set_xloading()
@@ -25,6 +28,7 @@ class SerialSimulation(Simulation, cls_name="serial"):
             else:
                 q0 = None
                 sys.set_eta0()
+            sys.set_args()                
             sys.set_ic(q0)
             sys.solve()
             if sys0 is None:

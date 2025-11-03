@@ -3,6 +3,9 @@ import pathlib
 import jax.numpy as jnp
 import numpy as np
 import pickle
+from feniax.ulogger.setup import  get_logger
+
+logger = get_logger(__name__)
 
 
 class Solution(ABC):
@@ -10,6 +13,20 @@ class Solution(ABC):
     def set_solcontainer(): ...
 
     def __init__(self, path: str | pathlib.Path = None):
+        """
+
+        Parameters
+        ----------
+        path : str | pathlib.Path
+            Path to folder where the solution object can dump to and
+            read data from
+
+        Examples
+        --------
+        FIXME: Add docs.
+
+        """
+        
         self.set_solcontainer()
         if path is not None:
             self.path = pathlib.Path(path)
@@ -20,6 +37,9 @@ class Solution(ABC):
         self.data = Data()
 
     def add_container(self, name: str, *args, label="", **kwargs):
+        """
+        Adds a solution container to data object
+        """
         try:
             Container = getattr(self.sol_container, name)
         except AttributeError:
@@ -27,10 +47,34 @@ class Solution(ABC):
                 f"Container {name} is not a valid name \
             in {self.sol_container.__file__}"
             )
+        logger.info(f"Setting Container {name.lower() + label} for solution data object")
         setattr(self.data, name.lower() + label, Container(*args, **kwargs))
         self.containers.append(name + label)
 
     def load_container(self, name: str, label=""):
+        """Loads container from disk
+
+        Saves the loaded data into the data attribute
+
+        Parameters
+        ----------
+        name : str
+            Name of container
+        label : str
+            Label of container (addition to name so there can be more
+            than one)
+
+        Raises
+        ------
+        AttributeError
+            The given name is not a container of the solution
+
+        Examples
+        --------
+        FIXME: Add docs.
+
+        """
+        
         try:
             Container = getattr(self.sol_container, name)
         except AttributeError:
@@ -44,12 +88,16 @@ class Solution(ABC):
         self.containers.append(name + label)
 
     def del_container(self, name, label=""):
+        
         assert (name + label) in self.containers, f"{name} is not a container in \
         the current solution object"
         delattr(self.data, name.lower() + label)
         self.containers.remove(name + label)
 
     def save_container(self, name: str, label="", del_obj: bool = False):
+        """
+        Saves a given container to disk
+        """
         assert (name + label) in self.containers, f"{name} is not a container in \
         the current solution object"
         pathc = self.path / (name + label)
@@ -73,7 +121,7 @@ class IntrinsicSolution(Solution):
         self.sol_container = feniax.preprocessor.containers.intrinsicsol
 
 
-def save_container(path, container):
+def save_container(path: pathlib.Path, container):
     for attr_name in container.__slots__:
         attr = getattr(container, attr_name)
         attr_path = path / attr_name
@@ -83,7 +131,7 @@ def save_container(path, container):
             jnp.save(attr_path, jnp.array(attr))
         elif isinstance(attr, np.ndarray):
             jnp.save(attr_path, attr)
-        elif isinstance(attr, (list, dict, tuple)):
+        elif isinstance(attr, (list, dict, tuple, set)):
             with open(attr_path, "wb") as fp:  # Pickling
                 pickle.dump(attr, fp)
         elif attr is None:
@@ -114,6 +162,7 @@ def load_container(path: pathlib.Path, Container):
                 (Container.__annotations__[attr_name].__name__ == "dict")
                 or (Container.__annotations__[attr_name].__name__ == "list")
                 or (Container.__annotations__[attr_name].__name__ == "tuple")
+                or (Container.__annotations__[attr_name].__name__ == "set")
             ):
                 with open(attr_path, "rb") as fp:  # Unpickling
                     kwargs[attr_name] = pickle.load(fp)

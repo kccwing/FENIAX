@@ -5,7 +5,7 @@ import jax.numpy as jnp
 
 @dataclass(slots=True)
 class Modes:
-    phi1: jnp.ndarray
+    phi1: jnp.ndarray   # (Nm, 6, Nn)
     psi1: jnp.ndarray
     phi2: jnp.ndarray
     phi1l: jnp.ndarray
@@ -21,10 +21,10 @@ class Modes:
 
 @dataclass(slots=True)
 class Couplings:
-    alpha1: jnp.ndarray
-    alpha2: jnp.ndarray
-    gamma1: jnp.ndarray
-    gamma2: jnp.ndarray
+    alpha1: jnp.ndarray = None  # Nm x Nm
+    alpha2: jnp.ndarray = None
+    gamma1: jnp.ndarray = None  # Nm x Nm x Nm
+    gamma2: jnp.ndarray = None
 
 
 @dataclass(slots=True)
@@ -36,8 +36,8 @@ class DynamicSystem:
     Cab: jnp.ndarray
     ra: jnp.ndarray
     t: jnp.ndarray = None
-    jac: dict = None
-    f_ad: dict = None
+    jac: dict[str,jnp.ndarray] = None
+    objective: jnp.ndarray = None
 
 
 @dataclass(slots=True)
@@ -48,8 +48,8 @@ class StaticSystem:
     Cab: jnp.ndarray = None
     ra: jnp.ndarray = None
     t: dict = None
-    jac: dict[str,jnp.ndarray] = None
-    f_ad: dict = None
+    jac: dict[str,jnp.ndarray] = None # dict[str,jnp.ndarray]
+    objective: jnp.ndarray = None
 
 @dataclass(slots=True)
 class PointForces:
@@ -108,6 +108,12 @@ class Shards:
     device_count: int = None
     local_device_count: int = None
 
+@dataclass(slots=True)
+class Forager:
+    filtered_indexes: set = None
+    filtered_values: list = None
+    filtered_map: dict = None        
+    field: jnp.ndarray = None    
     
 # import dataclasses
 # field_types = {field.name: field.type for field in dataclasses.fields(Modes)}

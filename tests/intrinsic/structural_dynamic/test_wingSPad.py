@@ -23,7 +23,6 @@ class TestWingSPad:
         inp.driver.sol_path= None
         inp.driver.save_fem = False
         inp.simulation.typeof = "single"
-        inp.system.name = "s1"
         inp.system.solution = "dynamic"
         inp.system.t1 = 10.
         inp.system.tn = 1001
@@ -63,7 +62,6 @@ class TestWingSPad:
         inp.driver.sol_path= None
         inp.driver.save_fem = False
         inp.simulation.typeof = "single"
-        inp.system.name = "s1"
         inp.system.solution = "dynamic"
         inp.system.t1 = 10.
         inp.system.tn = 1001
@@ -92,12 +90,12 @@ class TestWingSPad:
     
     def test_jac(self, sol):
         
-        assert jnp.abs(3567165.1388 - sol.dynamicsystem_sys1.jac['alpha']) < 0.01
+        assert jnp.abs(3726890.015 - sol.dynamicsystem_sys1.jac['alpha']) < 0.01
 
     def test_jacfd(self, sol, sol_epsilon):
         
         epsilon = 1e-4
-        jac_fd = (sol_epsilon.dynamicsystem_sys1.f_ad - sol.dynamicsystem_sys1.f_ad) / epsilon 
+        jac_fd = (sol_epsilon.dynamicsystem_sys1.objective - sol.dynamicsystem_sys1.objective) / epsilon 
         assert jnp.abs(jac_fd - sol.dynamicsystem_sys1.jac['alpha']) / jnp.linalg.norm(jac_fd) < 1e-4
 
     

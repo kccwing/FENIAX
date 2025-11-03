@@ -1,6 +1,7 @@
 import feniax.preprocessor.containers as containers
 from feniax.preprocessor.containers.data_container import DataContainer
 import feniax.preprocessor.utils as utils
+import feniax.utils
 import importlib
 import feniax.preprocessor.inputs as inputs
 import pathlib
@@ -12,15 +13,15 @@ import copy
 
 
 class Config:
+    
     def __init__(self, sett: dict):
         self.__sett = copy.copy(sett)
         self.__serial_data = None
         self.__extract_attr()
         self.__load_container()
-        self.__build()
-        self._data_dict = serialize(self)
         self.__defaults()
-        self.__set_defaults()
+        self.__set_defaults()        
+        self.__build()
 
     def __extract_attr(self):
         """Extracts attributes that do not belong to a container.
@@ -41,22 +42,29 @@ class Config:
 
     def __defaults(self):
         self.__MOD_DEFAULT = dict(optionsjax=["jax_np", "jax_scipy"])
-        self.__CONTAINER_DEFAULT = dict(intrinsicmodal="const")
+        self.__CONTAINER_DEFAULT = dict(intrinsicmodal=["const", "log"])
 
     def __set_defaults(self):
         # default modules
         for k, v in self.__MOD_DEFAULT.items():
             _container = importlib.import_module(f"feniax.preprocessor.containers.{k}")
             for i in v:
-                if not hasattr(self, i):
-                    container_k = getattr(_container, "".join(["D", i]))
+                container_k = getattr(_container, "".join(["D", i]))                
+                if i in self.__sett.keys():
+                    setattr(self, i, container_k(**self.__sett[i]))
+                    del self.__sett[i]
+                else:
                     setattr(self, i, container_k())
         # default containers within self.engine module
-        for k, v in self.__CONTAINER_DEFAULT.items():
+        for k, vlist in self.__CONTAINER_DEFAULT.items():
             if self.engine == k:
-                if not hasattr(self, v):
+                for v in vlist:
                     container_v = getattr(self.__container, "".join(["D", v]))
-                    setattr(self, v, container_v())
+                    if v in self.__sett.keys():
+                        setattr(self, v, container_v(**self.__sett[v]))
+                        del self.__sett[v]
+                    else:
+                        setattr(self, v, container_v())
 
     def __build(self):
         if self.engine == "intrinsicmodal":  # needs some specialisation here
@@ -66,7 +74,7 @@ class Config:
             container_k_initialised = container_k(**v)
             setattr(self, k, container_k_initialised)
             for k, v in self.__sett.items():
-                if k != "fem":
+                if k != "fem" and v is not None: # avoid empty containers
                     container_k = getattr(self.__container, "".join(["D", k]))
                     if k == "systems" or k == "system":  # pass Dfem
                         container_k_initialised = container_k(
@@ -87,13 +95,24 @@ class Config:
     def __set_attr(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
-
+            
     @classmethod
     def from_file(cls, file_dir: str | pathlib.Path, **kwargs):
         yaml = YAML()
         yaml_dict = yaml.load(pathlib.Path(file_dir))
         return cls(yaml_dict)
 
+    def clone(self, add_attr:dict=None, del_attr:str|list=None):
+        self_dict = serialize_nocomments(self)
+        if add_attr is not None:
+            self_dict = feniax.utils.dict_merge(self_dict, add_attr)
+        if del_attr is not None:
+            if isinstance(del_attr, str):
+                feniax.utils.dict_deletebypath(self_dict, del_attr)
+            elif isinstance(del_attr, list):
+                for li in del_attr:
+                    feniax.utils.dict_deletebypath(self_dict, li)
+        return Config(self_dict)
 
 class ValidateConfig:
     @staticmethod
@@ -106,7 +125,7 @@ class ValidateConfig:
         assert hasattr(config, "driver"), "No 'driver' attr in config object"
         assert hasattr(config, "fem"), "No 'fem' attr in config object"
 
-def serialize(obj: Config | DataContainer):
+def serialize(obj: Config | DataContainer=None):
     dictionary = dict()
     for k, v in obj.__dict__.items():
         # serialise if it is ndarray
@@ -130,21 +149,54 @@ def serialize(obj: Config | DataContainer):
                         obj.__dataclass_fields__[k].init
                         and obj.__dataclass_fields__[k].metadata["yaml_save"]
                     ):
-                        dictionary[k] = [
-                            v,
-                            # obj.__dataclass_fields__[k].metadata["description"],
-                            obj.attributes.get(k, "No description available")
-                        ]
+                        metadata_description = obj.__dataclass_fields__[k].metadata["description"]
+                        if len(metadata_description) > 0:
+                            dictionary[k] = [
+                                v,
+                                metadata_description,
+                            ]
+                        else:
+                            dictionary[k] = [
+                                v,
+                                obj.attributes.get(k, "No description available")
+                            ]
                 else:
                     dictionary[k] = [v, " "]
-    return dictionary
+    return dictionary        
 
+def serialize_nocomments(obj: Config | DataContainer=None):
+    dictionary = dict()
+    for k, v in obj.__dict__.items():
+        if isinstance(v, pathlib.Path):
+            v = str(v)
+        if k == "systems":
+            dictionary[k] = dict(sett={})
+            for k2, v2 in obj.systems.mapper.items():
+                dictionary[k]["sett"][k2] = serialize_nocomments(v2)
+            continue
+        # ensure the field is public
+        if k[0] != "_":
+            if isinstance(v, DataContainer):
+                dictionary[k] = serialize_nocomments(v)
+            else:
+                # ensure v is not an uninitialised field, which should not be saved
+                if isinstance(obj, DataContainer):
+                    if (
+                        obj.__dataclass_fields__[k].init
+                        #and obj.__dataclass_fields__[k].metadata["yaml_save"]
+                    ):
+                        dictionary[k] = v 
+                else:
+                    dictionary[k] = v
+
+    return dictionary        
 
 def dump_to_yaml(file_out: str | pathlib.Path, config: Config, with_comments=True):
     yaml = YAML()
     file_out = pathlib.Path(file_out)
     file_out.parent.mkdir(parents=True, exist_ok=True)
-    data = utils.dump_inputs(config._data_dict, with_comments=with_comments)
+    data_dict = serialize(config)
+    data = utils.dump_inputs(data_dict, with_comments=with_comments)
     with open(file_out, "w") as f:
         yaml.dump(data, f)
 

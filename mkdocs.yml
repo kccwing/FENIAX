@@ -96,13 +96,7 @@ markdown_extensions:
 plugins:
     - search  # default search plugin; needs manually re-enabling when using any other plugins
     - autorefs  # Cross-links to headings
-    - include_exclude_files:
-        include:
-        # exclude:
-        #     - "_overrides"
-        #     - "_static/README.md"
-    - mknotebooks  # Jupyter notebooks
-    #- mkdocs-jupyter:
+    - mkdocs-jupyter  # Jupyter notebooks
     #      ignore_h1_titles: True    
     - mkdocstrings:
         default_handler: python
@@ -121,7 +115,7 @@ plugins:
                     - inherited_members: true  # Allow looking up inherited methods
                 rendering:
                     - show_root_heading: true  # actually display anything at all...
-                    - show_root_full_path: true  # display "diffrax.asdf" not just "asdf"
+                    - show_root_full_path: true  # display "feniax.asdf" not just "asdf"
                     - show_if_no_docstring: true
                     - show_signature_annotations: true
                     - show_source: false  # don't include source code
@@ -133,22 +127,30 @@ nav:
   - Getting started: getting_started.md
   - Examples:
       - Summary: ./examples.md
-      # - Structural and aeroelastic response of clamped Aircraft: 
-      # - Free-flying ultra flexible structure
-      # - CPC_runs: examples/runs.md #../reports/CPC24/runs.md
       - Sail Plane static response: examples/SailPlane/sailplane_nb.md
       - Wing nonlinear dynamics: examples/wingSP/wingSP_nb.md
-      - Free flying shell structure: examples/SimoFS/main.md
       - Full aircraft (clamped) gust verification: examples/industrialAC/main.md
-      - Full aircraft trim + dynamic loads: examples/industrialACtrim/main.md
+      - Concurrent loads: examples/ConcurrentLoads/main.md 
   #- Postprocessing
   - Theoretical background:
       - Intrinsic modal description: theory_intrinsic.md
-  - Architecture:
+      - Publications: publications.md
+  - Software & Architecture:
       - JAX: JAX.md
+      - Algorithms: algorithms.md
       - UML description: UML.md
-      - Program inputs: inputs.md 
-  - Code base:
+      - Developer: developer.md
+      - Postprocessing: postprocessing.md  
+  - Codebase:
       - Inputs: api/inputs.md
+      - Configuration: api/configuration.md
+      - Drivers: api/drivers.md        
       - Modes: api/modes.md
       - Nonlinear couplings: api/couplings.md
+      - Simulations: api/simulations.md  
+      - Systems: api/systems.md
+      - Solvers: api/sollibs.md
+      - Equations: api/equations.md  
+      - Deformations: api/deformations.md
+        
+        

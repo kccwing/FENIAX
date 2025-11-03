@@ -1,18 +1,89 @@
 from functools import partial
-
+import logging
 import feniax.intrinsic.args as libargs
 import feniax.intrinsic.dq_dynamic as dq_dynamic
 import feniax.intrinsic.dq_static as dq_static
 import feniax.intrinsic.initcond as initcond
 import feniax.intrinsic.postprocess as postprocess
 import feniax.preprocessor.containers.intrinsicmodal as intrinsicmodal
-import feniax.preprocessor.solution as solution
 import feniax.systems.sollibs as sollibs
 import feniax.intrinsic.xloads as xloads
+from feniax.preprocessor import solution, configuration
 
 import jax
 import jax.numpy as jnp
 from feniax.systems.system import System
+from feniax.ulogger.setup import get_logger
+
+logger = get_logger(__name__)
+
+def f_xloading(settings: intrinsicmodal.Dsystem,
+               fem: intrinsicmodal.Dfem,
+               sol: solution.IntrinsicSolution,
+               compute_follower=True, compute_dead=True, compute_gravity=True,
+               dynamic=False,
+               ):
+
+    force_follower = None
+    force_dead = None
+    force_gravity = None
+    if settings.xloads.follower_forces and compute_follower:
+       # settings.xloads.build_point_follower(
+       #     fem.num_nodes, sol.data.modes.C06ab
+       # )           
+       force_follower = xloads.build_point_follower(settings.xloads.x,
+                                                     settings.xloads.follower_points,
+                                                     settings.xloads.follower_interpolation,
+                                                     fem.num_nodes,
+                                                     sol.data.modes.C06ab
+                                                     )
+    if settings.xloads.dead_forces and compute_dead:
+        force_dead = xloads.build_point_dead(settings.xloads.x,
+                                             settings.xloads.dead_points,
+                                             settings.xloads.dead_interpolation,
+                                             fem.num_nodes,
+                                             )
+    if settings.xloads.gravity_forces and compute_gravity:
+        if fem.constrainedDoF:
+            force_gravity = xloads.build_gravity(settings.xloads.x,
+                                 settings.xloads.gravity,
+                                 settings.xloads.gravity_vect,
+                                 fem.Ma0s,
+                                 fem.Mfe_order0s)
+        else:
+            force_gravity = xloads.build_gravity(settings.xloads.x,
+                                 settings.xloads.gravity,
+                                 settings.xloads.gravity_vect,
+                                 fem.Ma,
+                                 fem.Mfe_order)
+    sol.add_container(
+        "PointForces", label="_" + settings.name,
+        force_follower=force_follower,
+        force_dead=force_dead,
+        force_gravity=force_gravity,
+        x=settings.xloads.x
+    )
+
+    if settings.aero is not None:
+        import feniax.intrinsic.aero as aero
+
+        approx = settings.aero.approx.capitalize()
+        aeroobj = aero.Registry.create_instance(
+            f"Aero{approx}", settings, sol
+        )
+        aeroobj.get_matrices()
+        aeroobj.save_sol()
+        if dynamic and settings.aero.gust is not None:
+            import feniax.intrinsic.gust as gust
+
+            profile = settings.aero.gust_profile.capitalize()
+            gustobj = gust.Registry.create_instance(
+                f"Gust{approx}{profile}", settings, sol
+            )
+            gustobj.calculate_normals()
+            gustobj.calculate_downwash()
+            gustobj.set_solution(sol, settings.name)
+    
 
 
 def _staticSolve(eqsolver, dq, t_loads, q0, dq_args, sett):
@@ -24,7 +95,6 @@ def _staticSolve(eqsolver, dq, t_loads, q0, dq_args, sett):
 
     qcarry, qs = jax.lax.scan(_iter, q0, jnp.array(t_loads))
     return qs
-
 
 @partial(jax.jit, static_argnames=["config", "tn"])
 def recover_fields(q1, q2, tn, X, phi1l, phi2l, psi2l, X_xdelta, C0ab, config):
@@ -78,7 +148,6 @@ def recover_staticfields(q2, tn, X, phi2l, psi2l, X_xdelta, C0ab, config):
 
     return X2, X3, ra, Cab
 
-
 class IntrinsicSystem(System, cls_name="intrinsic"):
     def __init__(
         self,
@@ -86,7 +155,7 @@ class IntrinsicSystem(System, cls_name="intrinsic"):
         settings: intrinsicmodal.Dsystem,
         fem: intrinsicmodal.Dfem,
         sol: solution.IntrinsicSolution,
-        config,
+        config: configuration.Config,
     ):
         self.name = name
         self.settings = settings
@@ -96,27 +165,29 @@ class IntrinsicSystem(System, cls_name="intrinsic"):
         # self._set_xloading()
         # self._set_generator()
         # self._set_solver()
-
+        
     def set_args(self):
         label = self.settings.label.split("_")[-1]
+        logger.info(f"Setting arguments for System main function with label {label}")
         solver_args = getattr(libargs, f"arg_{label}")
         self.args1 = solver_args(self.sol, self.settings, self.fem, eta_0=self.eta0)
         
     def set_eta0(self, eta0=None):
+        logger.info(f"Setting input modal forces (eta) for the system")        
         num_modes = self.fem.num_modes
         if eta0 is None:
             self.eta0 = jnp.zeros(num_modes)
         else:
             assert len(eta0) == num_modes, "wrong length in eta0"
             self.eta0 = eta0
-        self.set_args()
 
     def set_ic(self, q0):
+        logger.info(f"Setting initial conditions for the System (qs(0))")
         if q0 is None:
             self.q0 = jnp.zeros(self.settings.num_states)
             if self.settings.init_states is not None:
                 for k, v in self.settings.init_states.items():
-                    if type(v[0]) == "str" and v[0].lower == "prescribed":
+                    if type(v[0]) == str and v[0].lower() == "prescribed":
                         qi0 = jnp.array(v[1])
                         assert len(qi0) == len(
                             self.settings.states[k]
@@ -150,56 +221,28 @@ class IntrinsicSystem(System, cls_name="intrinsic"):
 
     def set_xloading(self, compute_follower=True, compute_dead=True, compute_gravity=True):
 
-        force_follower = None
-        force_dead = None
-        force_gravity = None
-        if self.settings.xloads.follower_forces and compute_follower:
-           # self.settings.xloads.build_point_follower(
-           #     self.fem.num_nodes, self.sol.data.modes.C06ab
-           # )           
-           force_follower = xloads.build_point_follower(self.settings.xloads.x,
-                                                         self.settings.xloads.follower_points,
-                                                         self.settings.xloads.follower_interpolation,
-                                                         self.fem.num_nodes,
-                                                         self.sol.data.modes.C06ab
-                                                         )
-        if self.settings.xloads.dead_forces and compute_dead:
-            force_dead = xloads.build_point_dead(self.settings.xloads.x,
-                                                 self.settings.xloads.dead_points,
-                                                 self.settings.xloads.dead_interpolation,
-                                                 self.fem.num_nodes,
-                                                 )
-        if self.settings.xloads.gravity_forces and compute_gravity:
-            if self.fem.constrainedDoF:
-                force_gravity = xloads.build_gravity(self.settings.xloads.x,
-                                     self.settings.xloads.gravity,
-                                     self.settings.xloads.gravity_vect,
-                                     self.fem.Ma0s,
-                                     self.fem.Mfe_order0s)
-            else:
-                force_gravity = xloads.build_gravity(self.settings.xloads.x,
-                                     self.settings.xloads.gravity,
-                                     self.settings.xloads.gravity_vect,
-                                     self.fem.Ma,
-                                     self.fem.Mfe_order)
-        self.sol.add_container(
-            "PointForces", label="_" + self.settings.name,
-            force_follower=force_follower,
-            force_dead=force_dead,
-            force_gravity=force_gravity,
-            x=self.settings.xloads.x
-        )
+        logger.info(f"Setting external loads data for the System")        
+        f_xloading(settings=self.settings,
+                   fem=self.fem,
+                   sol=self.sol,
+                   compute_follower=compute_follower,
+                   compute_dead=compute_dead,
+                   compute_gravity=compute_gravity,
+                   dynamic=False
+                   )
 
     def set_states(self):
         self.settings.build_states(self.fem.num_modes, self.fem.num_nodes)
 
     def set_solver(self):
+        logger.info(f"Setting library to solve the equations ({self.settings.solver_library})")
         self.states_puller, self.eqsolver = sollibs.factory(
             self.settings.solver_library, self.settings.solver_function
         )
 
     def build_connection_eta(self):
 
+        logger.info(f"Building eta0 for system connection")
         elevator_index = self.settings.aero.elevator_index
         elevator_link = self.settings.aero.elevator_link
         aero = getattr(self.sol.data, f"modalaeroroger_{self.settings.name}")
@@ -242,14 +285,14 @@ class StaticIntrinsic(IntrinsicSystem, cls_name="static_intrinsic"):
 
     def set_system(self):
         label = f"dq_{self.settings.label}"
-        print(f"***** Setting intrinsinc static system with label {label}")
+        logger.info(f"Setting {self.__class__.__name__} with label {label}")        
         self.dFq = getattr(dq_static, label)
 
     def solve(self):
         # label = self.settings.label.split("_")[-1]
         # solver_args = getattr(libargs, f"arg_{label}")
         # args1 = solver_args(self.sol, self.settings, self.fem, eta_0=self.eta0)
-
+        logger.info(f"Running System solution")
         self.qs = _staticSolve(
             self.eqsolver,
             self.dFq,
@@ -261,6 +304,10 @@ class StaticIntrinsic(IntrinsicSystem, cls_name="static_intrinsic"):
         self.build_solution()
 
     def solve_forloop(self):
+        """
+        Deprecated function. Left it for info about other implementation
+        """
+        
         label = self.settings.label.split("_")[-1]
         solver_args = getattr(libargs, f"arg_{label}")
         qs = [self.q0]
@@ -274,6 +321,8 @@ class StaticIntrinsic(IntrinsicSystem, cls_name="static_intrinsic"):
         self.qs = jnp.array(qs[1:])
 
     def build_solution(self):
+        
+        logger.info(f"Building postprocessing fields (strains, velocities, positions, etc.)")
         q2_index = self.settings.states["q2"]
         q2 = self.qs[:, q2_index]
         tn = len(self.qs)
@@ -301,6 +350,10 @@ class StaticIntrinsic(IntrinsicSystem, cls_name="static_intrinsic"):
             self.sol.save_container("StaticSystem", label="_" + self.name)
 
     def build_solution_loop(self):
+        """
+        Deprecated function. Left it for info about other implementation
+        """
+        
         # q1 = qs[self.settings.q1_index, :]
         # q2 = qs[self.settings.q2_index, :]
         X2 = []
@@ -335,37 +388,25 @@ class StaticIntrinsic(IntrinsicSystem, cls_name="static_intrinsic"):
 
 class DynamicIntrinsic(IntrinsicSystem, cls_name="dynamic_intrinsic"):
     
-    def set_xloading(self):
-        super().set_xloading()
-        if self.settings.aero is not None:
-            import feniax.intrinsic.aero as aero
-
-            approx = self.settings.aero.approx.capitalize()
-            aeroobj = aero.Registry.create_instance(
-                f"Aero{approx}", self.settings, self.sol
-            )
-            aeroobj.get_matrices()
-            aeroobj.save_sol()
-            if self.settings.aero.gust is not None:
-                import feniax.intrinsic.gust as gust
-
-                profile = self.settings.aero.gust_profile.capitalize()
-                gustobj = gust.Registry.create_instance(
-                    f"Gust{approx}{profile}", self.settings, self.sol
-                )
-                gustobj.calculate_normals()
-                gustobj.calculate_downwash()
-                gustobj.set_solution(self.sol, self.settings.name)
+    def set_xloading(self, compute_follower=True, compute_dead=True, compute_gravity=True):
+        
+        f_xloading(settings=self.settings,
+                   fem=self.fem,
+                   sol=self.sol,
+                   compute_follower=compute_follower,
+                   compute_dead=compute_dead,
+                   compute_gravity=compute_gravity,
+                   dynamic=True
+                   )
 
     def set_system(self):
         label = f"dq_{self.settings.label}"
-        print(f"***** Setting intrinsinc Dynamic system with label {label}")
+        logger.debug(f"Setting {self.__class__.__name__} with label {label}")                      
         self.dFq = getattr(dq_dynamic, label)
 
     def solve(self):
-        # label = self.settings.label.split("_")[-1]
-        # solver_args = getattr(libargs, f"arg_{label}")
-        # args1 = solver_args(self.sol, self.settings, self.fem, eta_0=self.eta0)
+
+        logger.info(f"Running System solution")
         sol = self.eqsolver(
             self.dFq,
             self.args1,
@@ -381,9 +422,10 @@ class DynamicIntrinsic(IntrinsicSystem, cls_name="dynamic_intrinsic"):
         self.build_solution()
 
     def build_solution_loop(self):
-        # return
-        # q1 = qs[self.settings.q1_index, :]
-        # q2 = qs[self.settings.q2_index, :]
+        """
+        Deprecated function. Left it for info about other implementation
+        """
+
         X2 = []
         X3 = []
         Cab = []
@@ -433,6 +475,7 @@ class DynamicIntrinsic(IntrinsicSystem, cls_name="dynamic_intrinsic"):
 
         # q1 = qs[self.settings.q1_index, :]
         # q2 = qs[self.settings.q2_index, :]
+        logger.info(f"Building postprocessing fields (strains, velocities, positions, etc.)")        
         X1 = postprocess.compute_velocities(
             self.sol.data.modes.phi1l, self.qs[:, self.settings.states["q1"]]
         )

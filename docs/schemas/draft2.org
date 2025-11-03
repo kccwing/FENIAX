@@ -5,22 +5,15 @@
 #+LATEX_HEADER: \usepackage{algpseudocode}
 #+LATEX_HEADER: \usepackage[ruled,vlined]{algorithm2e}
 
-* HouseKeeping
+* HouseKeeping :noexport:
 #+begin_src elisp :results none :tangle no 
   (setq org-image-actual-width nil)
   (setq org-confirm-babel-evaluate nil)
-  ;; (setq org-latex-pdf-process
-  ;;   '("latexmk -pdflatex='pdflatex --syntex=1 -interaction nonstopmode' -pdf -bibtex -f %f"))
-  (setq org-latex-pdf-process
-        '("latexmk -pdflatex='pdflatex --syntex=1 -shell-escape -interaction nonstopmode' -pdf -bibtex -f %f"
-          "latexmk -pdflatex='pdflatex --syntex=1 -shell-escape -interaction nonstopmode' -pdf -bibtex -f %f"))
-
-  (require 'org-tempo)
   (pyvenv-workon "feniax")
 
 #+end_src
 
-* Challenging problems driving the research :noexport:
+* COMMENT Challenging problems driving the research 
 ** Geometrically nonlinear aeroelastic analysis using complex GFEMs
 - Flight loads
 - Airframe integrity: flutter or divergence assessment
@@ -30,7 +23,7 @@
 - JAX Just in Time Compilation (JIT)
 - Code vectorisation and parallelisation.
 - Run on accelerators (GPUs, TPUs, etc.)
-** Derivatives of aeroelastic  for design optimisation.
+** Derivatives of aeroelastic analysis for design optimisation.
 - Using JAX algorithmic differentiation.
 *** Efficient derivatives
 JAX AD package using pure functions from functional programming style.
@@ -41,37 +34,66 @@ If for instance one wants to set an optimisation with boundaries on the maximum 
 *** Perform calculations on different models in a single run
 Via the supercase option of driver. This might be used to compute finite differences; or if the response of if the response of a fractured component is to be compared.
 
-* Code design and software architecture :noexport:
+* COMMENT Physical models
+** Downwash for DLM
+Collocation-points-Normals_atCollocation-Downwash-AIC*Downwash
+
+* COMMENT Code design and software architecture 
+- feniax main: entry point of the simulation
 - Config object with input settings.
-- Driver class: initialises all relevant objects such as the simulation, and the systems that will solved in the solution process.
-- Simulation class: responsible for running the various systems appropriately, including setting the initial conditions from one system to another.
-- System class: set the computations to solve the corresponding system of equations, including the solver library that should be called, the system of equations and the arguments to the solvers.  
+- Driver class: initialises all relevant objects in the computation such as the simulation, and the systems objects.
+- Simulation class: responsible for running the various systems appropriately, including setting the initial conditions and passing data from one system of equations to another.
+- System class: sets the computations to solve the corresponding system of equations, including the solver library that should be called, the system of equations and the arguments to the solvers.
+
+** Main files
+*** main
+[[file:~/projects/FENIAX/feniax/feniax_main.py::"""Main FENIAX."""][file]]
+
+*** shardmain
+for gpu testing, it mimics a GPU if running from the CPU.
+*** mpimain
+features mpi for parallel computations
 
 ** Config
-config.engine = intrinsic
-config.supercase.fems[dict]
-config.subcase.system[].xloads
-config.simulation.typeof[Serial, parallel, Single]
-config.simulation.build_grads
-config.simulation.optimize
-config.
-config.systems[]
-config.system.name
-config.system.solver.library
-config.system.solver.settings
+[[file:~/projects/FENIAX/feniax/preprocessor/configuration.py::class Config:][Class]]
+
+- Builds configuration settings of the simulation
+- Static object in jit functions
+- The config object encapsulates a set of containers that are data classes with the simulation variables
+- The object is serialised and saved into a .yaml file.
+- This config .yaml file is needed if postprocessing in Streamlit is to be deployed
+- The
+- Work still needed in terms of , contributions are welcome.
+*** Containers
+- Branchless programming: critical optimisation technique. Avoid conditional statements in core computational subroutines.
+  https://en.algorithmica.org/hpc/pipelining/branchless/
+- In FENIAX most conditionals happen at this level. 
+**** Intrinsic Modal
+[[file:~/projects/FENIAX/feniax/preprocessor/containers/intrinsicmodal.py::"""][Module]]
+***** fields
+- value
+- description: leave empty and place the description in the docstring, that way it will be available in the docs and also in the comments of the yaml file. This is the parser: [[file:~/projects/FENIAX/feniax/preprocessor/containers/data_container.py::def _initialize_attributes(cls):][initialise_attributes]], and here the [[file:~/projects/FENIAX/feniax/preprocessor/configuration.py::if (][serialize]].
+- default
+- options
+***** Docs
+See in the documentation: [[https://acea15.github.io/FENIAX/api/inputs/][Inputs]]
+  
 ** Driver
-(only driver gets to modify object)
-run_cases
-  -- set_case
-  -- integration.pre_simulation()
+- See [[file:~/projects/FENIAX/feniax/drivers/driver.py::class Driver(ABC):][AbstractClass]] for the contract between this family of classes and the rest of the code.  
+- Initialises objects in the simulation
+
+pre_simulation()
+  galerkin projection: [[file:~/projects/FENIAX/feniax/intrinsic/galerkin.py::class Galerkin:][Class]]
+run_cases()
   -- simulation.trigger()
-  -- 
-set_case
-(modifies config object)
-  -- Supercase
-  -- Subcase
-set_integration
-set_simulation -> simulation
+post_simulation()
+  -- forager()
+
+**** intrinsic_driver
+[[file:~/projects/FENIAX/feniax/drivers/intrinsic_driver.py::class IntrinsicDriver(Driver, cls_name="intrinsic"):][Class]]
+
+**** intrinsicMPI_driver
+
 ** Integration
 run
   -- calculate_modalshapes
@@ -79,19 +101,22 @@ run
 derivatives
 
 ** Simulation
+See [[file:~/projects/FENIAX/feniax/simulations/simulation.py::class Simulation(ABC):][AbstractClass]] 
 - trigger
-- _prerun
-- _run
-  -- system.set_init
-- _pull_solution
-- _postrun
-*** SerialSimulation
--_run
-*** ParallelSimulation
--_run
+  
 *** SingleSimulation
-- _run
+[[file:~/projects/FENIAX/feniax/simulations/single_simulation.py::class SingleSimulation(Simulation, cls_name="single"):][Class]]
+Only one system of equations solved
+*** SerialSimulation
+[[file:~/projects/FENIAX/feniax/simulations/serial_simulation.py::class SerialSimulation(Simulation, cls_name="serial"):][Class]]
+
+A group of system of equations is solved in series:
+For example: trim-gust-flutter...
+*** ParallelSimulation
+Not implemented
+For example: trim solution -> [gust-flutter (in parallel)]
 ** System
+
 - set_init -> q0
 - set_name
 - set_generator -> dq
@@ -109,20 +134,41 @@ Systems with labels:
 [[file:~/projects/FENIAX/feniax/systems/intrinsicAD.py::label = f"main_{label_sys}_{label_ad}"][AD_system]]
 [[file:~/projects/FENIAX/feniax/systems/intrinsicShard.py::self.label = f"main_{label_sys}_{label_shard}"][shard_system]]
 
+*** Architecture for the solution of systems
+
+Chain of requirements between the various ways to run the code.
+Fast needs to use the functions in Flexible:
+Fast -> Flexible and similarly:
+AD -> Fast
+Shard -> Flexible
+ShardF -> Shard
+
+
+- Flexible: workflow of simulations happening sequentially
+  major functions for the systems to be solved can be found in dq_...:
+  [[file:~/projects/FENIAX/feniax/intrinsic/dq_dynamic.py][dq_dynamic]]
+  [[file:~/projects/FENIAX/feniax/intrinsic/dq_static.py][dq_static]]
+
   
-** XForces
-*** prescribed_follower
-*** prescribed_dead
+- Fast: entire solution within one function such that memory copies to cuda devices are avoided.
+  Computation of intrinsic modes, modal couplings, aerodynamic matrices happen within a single function, from within the solution of the system of equations is also called.
+  Importantly, the functions within the dq_[] modules are used for the solution, thereby avoiding code duplication and promoting modular design.
+  
+- AD: the entire solution within one function as well, but needs inputs/ outputs for the differentiation to take place
+
+  The function to be differentiated will call the function in the   
+
+- Shard flexible: workflow as in flexible but with inputs over which to build solutions in parallel.
+
+- Shard fast: Similarly, everything happens within a function, 
+
+- Shard AD: shard the inputs, take a function for the output,
+  
+
+** ExternalForces
+*** prescribed follower and dead point forces
 *** gravity
 *** modal_aero
-** inputs
-*** container
-*** fields
-- value
-- description
-- default
-- options
-
 
 ** UML
 
@@ -278,8 +324,145 @@ Systems with labels:
 #+RESULTS: classes_architecture
 [[file:UML_software1.png]]
 
-* Algorithms
 
+#+Name: architecture
+#+begin_src plantuml :file ../images/abstract_classes.png
+  circle feniax_main
+  class Config {
+  	+clone()
+  	+from_file(file_name: str)
+  	}
+  	
+  abstract Driver {
+            +pre_simulation()
+            +run_cases()
+            +post_simulation()
+            -_set_simulation()
+            -_set_systems()		
+    }
+
+  abstract class Simulation {
+          +trigger()
+          -_run_systems()
+          -_post_run()
+  }
+
+  abstract class System {
+  		+set_ic()
+  		+solve()
+  		+set_system()
+  		+set_solver()
+  		+build_solution()		
+  }
+
+  metaclass Sollibs {
+          +name()
+          +pull_name()
+  }
+  feniax_main -- Config
+  Config -- Driver	
+  Driver  *-- Simulation
+  Driver  *- System
+  System  *- Sollibs
+  System ..> Simulation
+#+end_src
+
+#+RESULTS: architecture
+[[file:../images/abstract_classes.png]]
+
+
+#+Name: inheritance_classes
+#+begin_src plantuml :file ../images/inheritance_classes.png
+  abstract Driver {
+          +pre_simulation()
+          +run_cases()
+  }
+
+  class IntrinsicDriver {
+  }
+
+  abstract class Simulation {
+  }
+
+  class SingleSimulation {
+  }
+  class SerialSimulation {
+  }
+  class ParallelSimulation {
+  }
+  class CoupledSimulation {
+  }
+
+  abstract class System {
+  }
+
+  class IntrinsicSystem {
+
+  }
+
+  class IntrinsicADSystem {
+
+  }
+
+
+  class StaticIntrinsic {
+
+  }
+
+  class DynamicIntrinsic {
+
+  }
+
+  class StaticADIntrinsic {
+
+  }
+
+  class DynamicADIntrinsic {
+
+  }
+
+  class StaticShardIntrinsic {
+
+  }
+
+  class DynamicShardIntrinsic {
+
+  }
+
+  class StaticADShardIntrinsic {
+
+  }
+
+  class DynamicADShardIntrinsic {
+
+  }
+
+  Driver <|-- IntrinsicDriver
+
+  Simulation <|-- SingleSimulation
+  SingleSimulation -- SerialSimulation 
+  SerialSimulation -- ParallelSimulation
+  ParallelSimulation -- CoupledSimulation					
+
+  System <|-- IntrinsicSystem
+  System <|-- IntrinsicADSystem
+  IntrinsicSystem <|-- StaticIntrinsic
+  IntrinsicSystem <|-- DynamicIntrinsic
+  IntrinsicADSystem <|-- StaticADIntrinsic
+  IntrinsicADSystem <|-- DynamicADIntrinsic
+  StaticIntrinsic -- StaticShardIntrinsic
+  DynamicIntrinsic -- DynamicShardIntrinsic
+  StaticADIntrinsic <|-- StaticADShardIntrinsic
+  StaticShardIntrinsic <|-- StaticADShardIntrinsic  
+  DynamicADIntrinsic <|-- DynamicADShardIntrinsic
+  DynamicShardIntrinsic <|-- DynamicADShardIntrinsic
+
+#+end_src
+
+#+RESULTS: inheritance_classes
+[[file:../images/inheritance_classes.png]]
+
+* COMMENT Algorithms
 
 $N_N$ Number of discretisation condensed nodes in the model
 $N_m$ Number of modal shapes in the solution
@@ -306,8 +489,7 @@ $\bm{r}_a$, $\bm{R}_{a}$   $\longleftarrow$ integration($\bm{X}_{3}$, $\bm{X}_a$
 \caption{Main components in solution process}
 \end{algorithm}
 
-
-* Simulation inputs :noexport:
+* COMMENT Simulation inputs 
 trim
 ----
 qh = 0
@@ -336,7 +518,7 @@ q1dot = f(gamma2) + eta_q(q0, qe)
 - Should be suitable for eigenvalue analysis
 
 *** Aerodynamic model via GAFs.
-- Preliminary DLM model. Automatically built from wing-box?
+- Preliminary DLM model. Automatically built from wing-box.
 - Steady loads: Corrections may be needed. 
   
 ** Output requirements
@@ -349,24 +531,22 @@ Critical for large design optimisation problems.
 ** Data workflow
 Well in place for Nastran Models  except for the derivatives provided by Nastran using Sol 200.
 
+* System based solutions 
 
+Systems:
+{solution=Type}{operationalmode="","fast", "AD"..}_intrinsic
+solution, target, BC: [[file:~/projects/FENIAX/feniax/preprocessor/containers/intrinsicmodal.py::class SystemSolution(Enum):][Types]]
+Operational Mode: [[file:~/projects/FENIAX/feniax/preprocessor/containers/intrinsicmodal.py::operationalmode: str = dfield(][operationalmode]]
 
-* System based solutions :noexport:
-TODO: make automatic label as the first
-| Type         | Target | Gravity    | BC1        | ModalAero | SteadyAero   | UnsteadyAero | Point loads | q0 approx | Rigid-body           | Nonlinearities         | residualised |
-|--------------+--------+------------+------------+-----------+--------------+--------------+-------------+-----------+----------------------+------------------------+--------------|
-| 1 static     | Level  | False: "g" | Clamped    | None      | None         | None         | None        | via q2    | 1-quaternion+strains | All -> ""              | None -> ""   |
-| 2 Dynamic    | TRIM1  | True: "G"  | Free       | Rogers    | qalpha       | gust         | follower    | via q1    | All-quaternions      | Linear sys -> "l"      | True -> "r"  |
-| 3 staticAD   |        |            |            |           |              |              |             |           |                      |                        |              |
-| 4 dynamicAD  |        |            |            |           |              |              |             |           |                      |                        |              |
-| 3 staticPL   | TRIM2  |            | Prescribed | Loewner   | qx (control) | controls     | dead        |           |                      | Linear sys+disp -> "L" |              |
-| 3 dynamicPL  | TRIM2  |            | Prescribed | Loewner   | qx (control) | controls     | dead        |           |                      | Linear sys+disp -> "L" |              |
-| 3 staticPLAD | TRIM2  |            | Prescribed | Loewner   | qx (control) | controls     | dead        |           |                      | Linear sys+disp -> "L" |              |
-| 3   | TRIM2  |            | Prescribed | Loewner   | qx (control) | controls     | dead        |           |                      | Linear sys+disp -> "L" |              |
+Multibody systems (defined at driver level: [[file:~/projects/FENIAX/feniax/preprocessor/containers/intrinsicmodal.py::typeof: str = dfield("", default=True, options=\["intrinsic", ""\])][typeof]])
+{solution=Type}{operationalmode="","fast", "AD"..}_intrinsicmultibody
 
+| Type        | Target | Gravity    | BC1        | ModalAero | SteadyAero   | UnsteadyAero | Point loads | q0 approx | Rigid-body           | Nonlinearities         | residualised |
+|-------------+--------+------------+------------+-----------+--------------+--------------+-------------+-----------+----------------------+------------------------+--------------|
+| 1 static    | Level  | False: "g" | Clamped    | None      | None         | None         | None        | via q2    | 1-quaternion+strains | All -> ""              | None -> ""   |
+| 2 Dynamic   | TRIM1  | True: "G"  | Free       | Rogers    | qalpha       | gust         | follower    | via q1    | All-quaternions      | Linear sys -> "l"      | True -> "r"  |
 | 3 Stability | TRIM2  |            | Prescribed | Loewner   | qx (control) | controls     | dead        |           |                      | Linear sys+disp -> "L" |              |
-| 4 Multibody |        |            |            |           |              |              |             |           |                      |                        |              |
-| 5 Control   |        |            |            |           |              |              |             |           |                      |                        |              |
+| 4 Control   |        |            |            |           |              |              |             |           |                      | only gamma1  -> "g1"   |              |
 
 | Sol name |                                                 | label                 | Imp |
 |----------+-------------------------------------------------+-----------------------+-----|
@@ -380,14 +560,15 @@ TODO: make automatic label as the first
 | 10G75    | Manoeuvre under qalpha+controls+Gravity         | [1,0,'G',0,1,2]       | N   |
 | 20g1     | Clamped Structural dynamics, free vibrations    | [2,0,'g']             | Y   |
 | 20G2     | Free Structural dynamic with gravity forces     | [2,0,'G',1]           | Y   |
+| 20g2     | Free Structural dynamic                         | [2,0,'g',1]           | Y   |
 | 20g11    | Structural dynamic follower point forces        | [2,0,'g',0,0,0,0,1]   | Y   |
 | 20g121   | Structural dynamic dead point forces            | [2,0,'g',0,0,0,0,2]   | Y   |
 | 20g22    | Free Structural dynamic follower point forces   | [2,0,'g',1,0,0,0,1]   | Y   |
 | 20g242   | Free Structural dynamic dead point forces       | [2,0,'g',1,0,0,0,2]   | Y   |
 | 11G6     | Static trimmed State (elevator-qalpha,          | [1,1,'G',1,1]         | Y   |
-|          |                       no gravity updating)      |                       |     |
+|          | no gravity updating)                            |                       |     |
 | 12G2     | Static trimmed State (elevator-qalpha,          | [1,2,'G',1]           | N   |
-|          |                       gravity updating)         |                       |     |
+|          | gravity updating)                               |                       |     |
 | 21G150   | Dynamic trimmed State                           | [2,1,'G',1,1,2]       | N   |
 | 20g21    | Gust response                                   | [2,0,'g',0,1,0,1]     | Y   |
 | 20g273   | Gust response, q0 obtained via integrator q1    | [2,0,'g',0,1,0,1,0,1] | Y   |

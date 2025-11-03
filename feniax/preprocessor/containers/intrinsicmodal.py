@@ -5,6 +5,7 @@ Containers for the intrinsic modal solution settings
 import inspect
 import math
 import pathlib
+import os
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from functools import wraps
@@ -22,6 +23,7 @@ from feniax.intrinsic.functions import (
 )
 from feniax.preprocessor.containers.data_container import DataContainer
 from feniax.preprocessor.utils import dfield, initialise_Dclass, load_jnp
+import feniax.intrinsic.utils as iutils
 
 def filter_kwargs(cls):
     @wraps(cls)
@@ -92,9 +94,46 @@ class Dconst(DataContainer):
     EMATT: jnp.ndarray = dfield("3x3 Identity matrix", init=False)
 
     def __post_init__(self):
+        object.__setattr__(self, "EMAT", jnp.array(self.EMAT))
         object.__setattr__(self, "EMATT", self.EMAT.T)
         self._initialize_attributes()
 
+@Ddataclass
+class Dlog(DataContainer):
+    """Simulation settings for the management the way each system is run.
+    
+    Parameters
+    ----------
+    typeof : str
+        Type of simulation ["single", "serial", "parallel"]
+    workflow : dict
+        Dictionary that defines which system is run after which.
+        The default None implies systems are run in order of the input
+    """
+
+    to_console: bool = dfield(
+        "Output to console", default=True
+    )
+    to_file: bool = dfield(
+        "Output to file", default=True
+    )    
+    level: str = dfield(
+        "Logging level", default="info", options=["notset", "debug", "info", "warning", "error", "critical"]
+    )
+    file_name: str = dfield("Name of log file",
+        default="feniax",
+    )
+    file_mode: str = dfield(
+        "Mode for writing log file", default="w", options=["w", "a"]
+    )
+    
+    path: str = dfield("Path to log file",
+        default=None,
+    ) 
+    def __post_init__(self):
+        if self.path is not None:
+            object.__setattr__(self, "path", pathlib.Path(self.path))
+        self._initialize_attributes()
 
 @Ddataclass
 class Dsimulation(DataContainer):
@@ -138,15 +177,18 @@ class Ddriver(DataContainer):
         Algorithm differentiation ON
     """
 
-    typeof: str = dfield("", default=True, options=["intrinsic"])
+    typeof: str = dfield("", default=True, options=["intrinsic", "intrinsicmultibody"])
     sol_path: str | pathlib.Path = dfield("", default="./")
     compute_fem: bool = dfield("", default=True)
     save_fem: bool = dfield("", default=True)
     ad_on: bool = dfield("", default=False)
+    fast_on: bool = dfield("", default=False)
 
     def __post_init__(self):
         if self.sol_path is not None:
             object.__setattr__(self, "sol_path", pathlib.Path(self.sol_path))
+            self.sol_path.mkdir(parents=True, exist_ok=True)
+            
         self._initialize_attributes()
 
 
@@ -263,7 +305,7 @@ class Dfem(DataContainer):
         options=["scipy", "jax_custom", "inputs, input_memory"],
     )
     eigenvals: jnp.ndarray = dfield("", default=None, yaml_save=False)
-    eigenvecs: jnp.ndarray = dfield("", default=None, yaml_save=False)
+    eigenvecs: jnp.ndarray = dfield("", default=None, yaml_save=False)  # [6Nn x Nm]
     eig_cutoff: float = dfield(
         "",
         default=1e-2,
@@ -333,43 +375,67 @@ class Dfem(DataContainer):
         Ka_name, Ma_name, grid = geometry.find_fem(
             self.folder, self.Ka_name, self.Ma_name, self.grid
         )
-        setobj("Ka_name", Ka_name)
-        setobj("Ma_name", Ma_name)
-        setobj("grid", grid)
+        
         if self.folder is not None:
             setobj("folder", pathlib.Path(self.folder).absolute())
         if self.Ka is None:
             if self.folder is None:
-                setobj("Ka", load_jnp(self.Ka_name))
+                setobj("Ka_name", os.path.abspath(Ka_name))
+                
             else:
-                setobj("Ka", load_jnp(self.folder / self.Ka_name))
+                setobj("Ka_name", self.folder / Ka_name)
+
         if self.Ma is None:
             if self.folder is None:
-                setobj("Ma", load_jnp(self.Ma_name))
+                setobj("Ma_name", os.path.abspath(Ma_name))
             else:
-                setobj("Ma", load_jnp(self.folder / self.Ma_name))
-                # setobj("Ma", load_jnp(self.Ma_name))
+                setobj("Ma_name", self.folder / Ma_name)
+
+        if self.Ka_name is not None and self.Ka is None:
+            setobj("Ka", load_jnp(self.Ka_name))
+        if self.Ma_name is not None and self.Ma is None:            
+            setobj("Ma", load_jnp(self.Ma_name))
+        if self.eig_names is not None and self.eigenvals is None:
+            eigenvals, eigenvecs = iutils.compute_eigs_load(self.num_modes,
+                                                           self.folder,
+                                                           self.eig_names)
+                                                           
+            setobj("eigenvals", eigenvals)
+            setobj("eigenvecs", eigenvecs)
+            if self.folder is None:
+                setobj("eig_names", [os.path.abspath(self.eig_names[0]),
+                                     os.path.abspath(self.eig_names[1])])
+            else:
+                setobj("eig_names", [os.path.abspath(self.folder / self.eig_names[0]),
+                                     os.path.abspath(self.folder / self.eig_names[1])])
+
+        if self.folder is None:
+            setobj("grid", os.path.abspath(grid))
+
+        else:
+            setobj("grid", self.folder / grid)
+                        
         if self.num_modes is None:
             # full set of modes in the solution
             setobj("num_modes", len(self.Ka))
-        if self.folder is None:
-            df_grid, X, fe_order, component_vect, dof_vect = geometry.build_grid(
-                self.grid,
-                self.X,
-                self.fe_order,
-                self.fe_order_start,
-                self.component_vect,
-                self.dof_vect,
-            )
-        else:
-            df_grid, X, fe_order, component_vect, dof_vect = geometry.build_grid(
-                self.folder / self.grid,
-                self.X,
-                self.fe_order,
-                self.fe_order_start,
-                self.component_vect,
-                self.dof_vect,
-            )
+        # if self.folder is None:
+        #     df_grid, X, fe_order, component_vect, dof_vect = geometry.build_grid(
+        #         self.grid,
+        #         self.X,
+        #         self.fe_order,
+        #         self.fe_order_start,
+        #         self.component_vect,
+        #         self.dof_vect,
+        #     )
+        # else:
+        df_grid, X, fe_order, component_vect, dof_vect = geometry.build_grid(
+            self.grid,
+            self.X,
+            self.fe_order,
+            self.fe_order_start,
+            self.component_vect,
+            self.dof_vect,
+        )
         setobj("df_grid", df_grid)
         setobj("X", X)
         setobj("fe_order", fe_order)
@@ -451,7 +517,7 @@ def gust_discretisation(
     min_collocationpoints,
     max_collocationpoints,
 ):
-    #
+    # TODO: change 1e-6 as option
     gust_totaltime = gust_length / u_inf
     xgust = jnp.arange(
         min_collocationpoints,  # jnp.min(collocation_points[:,0]),
@@ -534,16 +600,19 @@ class DGustMc(DGust):
     """
 
     u_inf: float = dfield("", default=None)
-    simulation_time: jnp.ndarray = dfield("", default=None)
+    simulation_time: jnp.ndarray = dfield("", default=None, yaml_save=False)
     intensity: float = dfield("", default=None)
     step: float = dfield("", default=None)
     time_epsilon: float = dfield("", default=1e-6)
     length: float = dfield("", default=None)
     shift: float = dfield("", default=0.0)
-    panels_dihedral: str | jnp.ndarray = dfield("", default=None)
-    collocation_points: str | jnp.ndarray = dfield("", default=None)
-    shape: str = dfield("", default="const")
-    fixed_discretisation: dict[str: float] = dfield("", default=None)
+    panels_dihedral: str | jnp.ndarray = dfield("", default=None, yaml_save=False)
+    collocation_points: str | jnp.ndarray = dfield("", default=None, yaml_save=False)
+    collocation_points_path: str = dfield("", default=None)
+    shape: str = dfield("",
+                        default="const")
+    fixed_discretisation: dict[str: float] = dfield("",
+                                                    default=None)
     totaltime: float = dfield("", init=False)
     x: jnp.ndarray = dfield("", init=False)
     time: jnp.ndarray = dfield("", init=False)
@@ -553,8 +622,18 @@ class DGustMc(DGust):
         if isinstance(self.panels_dihedral, (str, pathlib.Path)):
             object.__setattr__(self, "panels_dihedral", jnp.load(self.panels_dihedral))
         if isinstance(self.collocation_points, (str, pathlib.Path)):
+            object.__setattr__(self,
+                               "collocation_points_path",
+                               os.path.abspath(self.collocation_points)
+                               )            
             object.__setattr__(self, "collocation_points", jnp.load(self.collocation_points))
-
+            
+        elif self.collocation_points_path is not None:
+            object.__setattr__(self, "collocation_points", jnp.load(self.collocation_points_path))
+            object.__setattr__(self,
+                               "collocation_points_path",
+                               os.path.abspath(self.collocation_points_path)
+                               )
         object.__setattr__(self, "panels_dihedral", jnp.array(self.panels_dihedral))
         object.__setattr__(self, "collocation_points", jnp.array(self.collocation_points))    
         # self.panels_dihedral = jnp.array(self.panels_dihedral)
@@ -738,18 +817,31 @@ class Dxloads(DataContainer):
     follower_forces : bool
         Include point follower forces
     dead_forces : bool
+        Include point dead forces
     gravity_forces : bool
+        Include gravity in the analysis
     modalaero_forces : bool
+        Include aerodynamic forces
     x : Array
+        x-axis vector for interpolation
     force_follower : Array
+        Follower force points [Node, coordinate]
     force_dead : Array
+        Dead force points [Node, coordinate]
     follower_points : list
+        Follower force points [Node, coordinate]
     dead_points : list
+        Dead force points [Node, coordinate]
     follower_interpolation : list
+        (Linear) interpolation of the follower forces on t \
+         [[f0(t0)..f0(tn)]..[fm(t0)..fm(tn)]]
     dead_interpolation : list
+        (Linear) interpolation of the dead forces on t \
+         [[f0(t0)..f0(tn)]..[fm(t0)..fm(tn)]]
     gravity : float
+        gravity force [m/s]
     gravity_vect : Array
-
+        gravity vector
     Attributes
     ----------
 
@@ -763,41 +855,37 @@ class Dxloads(DataContainer):
 
     follower_forces: bool = dfield("", default=False)
     dead_forces: bool = dfield("", default=False)
-    gravity_forces: bool = dfield("Include gravity in the analysis", default=False)
-    modalaero_forces: bool = dfield("Include aerodynamic forces", default=False)
-    x: jnp.ndarray = dfield("x-axis vector for interpolation", default=None)
+    gravity_forces: bool = dfield("", default=False)
+    modalaero_forces: bool = dfield("", default=False)
+    x: jnp.ndarray = dfield("", default=None)
     force_follower: jnp.ndarray = dfield(
-        """Point follower forces
-    (len(x)x6xnum_nodes)""",
+        "",
         default=None,
     )
     force_dead: jnp.ndarray = dfield(
-        """Point follower forces
-    (len(x)x6xnum_nodes)""",
+        "",
         default=None,
     )
     follower_points: list[list[int, int]] = dfield(
-        "Follower force points [Node, coordinate]",
+        "",
         default=None,
     )
     dead_points: list[list[int, int]] = dfield(
-        "Dead force points [Node, coordinate]",
+        "",
         default=None,
     )
 
     follower_interpolation: list[list[float]] = dfield(
-        "(Linear) interpolation of the follower forces on t \
-        [[f0(t0)..f0(tn)]..[fm(t0)..fm(tn)]]",
+        "",
         default=None,
     )
     dead_interpolation: list[list[int]] = dfield(
-        "(Linear) interpolation of the dead forces on t \
-        [[f0(t0)..f0(tn)]..[fm(t0)..fm(tn)]]",
+        "",
         default=None,
     )
 
-    gravity: float = dfield("gravity force [m/s]", default=9.807)
-    gravity_vect: jnp.ndarray = dfield("gravity vector", default=jnp.array([0, 0, -1]))
+    gravity: float = dfield("", default=9.807)
+    gravity_vect: jnp.ndarray = dfield("", default=jnp.array([0, 0, -1]))
 
     # gravity_steps: int = dfield("steps in which gravity is applied in trim simulation",
     #                                    default=1) manage by t
@@ -896,16 +984,6 @@ SimulationTarget = Enum("TARGET", ["LEVEL", "TRIM", "MANOEUVRE", "TURBULENCE"])
 BoundaryCond = Enum("BC1", ["CLAMPED", "FREE", "PRESCRIBED"])
 
 
-class StateTrack:
-    def __init__(self):
-        self.states = dict()
-        self.num_states = 0
-
-    def update(self, **kwargs):
-        for k, v in kwargs.items():
-            self.states[k] = jnp.arange(self.num_states, self.num_states + v)
-            self.num_states += v
-
 
 @Ddataclass
 class Dlibrary(DataContainer):
@@ -981,7 +1059,7 @@ class DdiffraxNewton(Dlibrary):
 
 
 @Ddataclass
-class DobjectiveArgs(Dlibrary):
+class DobjectiveArgs(DataContainer):
     """Settings for the objective function in the AD
 
     Parameters
@@ -1022,7 +1100,7 @@ class ADinputType(Enum):
 
 
 @Ddataclass
-class DtoAD(Dlibrary):
+class DtoAD(DataContainer):
     """Algorithm differentiation settings
 
     Parameters
@@ -1075,6 +1153,9 @@ class DtoAD(Dlibrary):
                 _numcomponents=self._numcomponents,
             ),
         )
+        for k, v in self.inputs.items():
+            if isinstance(v, str):
+                self.inputs[k] = jnp.load(v)
         self._initialize_attributes()
 
 class ShardinputType(Enum):
@@ -1149,20 +1230,11 @@ class DShard_gust1(DataContainer):
     
 @Ddataclass
 class DShard(DataContainer):
-    """Algorithm differentiation settings
+    """ settings
 
     Parameters
     ----------
-    function : str
-    inputs : dict
     input_type : str
-    grad_type : str
-    objective_fun : str
-    objective_var : str
-    objective_args : dict
-    _numnodes : int
-    _numtime : int
-    _numcomponents : int
     label : str
 
     """
@@ -1192,118 +1264,148 @@ class Dsystem(DataContainer):
     Parameters
     ----------
     name : str
+        Name of the system (arbitrary)
     _fem : Dfem
     solution : str
+        Type of solution to be solved
     target : str
+        The simulation goal of this system (level, trim...)
     bc1 : str
+        Boundary condition first node
     save : bool
+        Save results of the run system
     xloads : dict | __main__.Dxloads
+        External loads dataclass
     aero : dict | __main__.Daero
+        Aerodynamic dataclass
     t0 : float
+        Initial time
     t1 : float
+        Final time
     tn : int
+        Number of time steps
     dt : float
+        Delta time
     t : Array
+        Time vector
     solver_library : str
+        Library solving our system of equations
     solver_function : str
+        Name for the solver of the previously defined library
     solver_settings : str
+        Settings for the solver
     q0treatment : int
+        Modal velocities, q1, and modal forces, q2, are the main variables
+        in the intrinsic structural description,
+        but the steady aerodynamics part needs a displacement component, q0;
+        proportional gain to q2 or  integration of velocities q1
+        can be used to obtain this.
     rb_treatment : int
+        Rigid-body treatment: 1 to use the first node quaternion to track the body
+        dynamics (integration of strains thereafter; 2 to use quaternions at every node.)
     nonlinear : bool
+        whether to include the nonlinear terms in the eqs. (Gammas)
+        and in the integration
     residualise : bool
+        average the higher frequency eqs and make them algebraic (to be implemented)
     residual_modes : int
+        number of modes to residualise
     label : str
+        System label that maps to the solution functional
     label_map : dict
+        label dictionary
     states : dict
+        Dictionary with the state variables.
     num_states : int
+        Total number of states
     init_states : dict
+        Dictionary with initial conditions for each state
     init_mapper : dict
+        Dictionary mapping states types to functions in initcond
     ad : DtoAD
-
+        Dictionary for AD
+    shard: Dshard
+        Dictionary for parallelisation
     """
 
-    name: str = dfield("System name")
+    name: str = dfield("", default="sys1")
     _fem: Dfem = dfield("", default=None, yaml_save=False)
     solution: str = dfield(
-        "Type of solution to be solved",
+        "",
         options=["static", "dynamic", "multibody", "stability"],
     )
     target: str = dfield(
-        "The simulation goal of this system",
+        "",
         default="Level",
         options=SimulationTarget._member_names_,
     )
     bc1: str = dfield(
-        "Boundary condition first node",
+        "",
         default="clamped",
         options=BoundaryCond._member_names_,
     )
     operationalmode: str = dfield(
         "",
-        options=["(empty string/default)", "AD", "Shard", "ShardAD"],
+        options=["(empty string/default)", "Fast", "AD", "Shard", "ShardMap", "ShardAD"],
         default=""
     )
-    
-    save: bool = dfield("Save results of the run system", default=True)
-    xloads: dict | Dxloads = dfield("External loads dataclass", default=None)
-    aero: dict | Daero = dfield("Aerodynamic dataclass", default=None)
-    t0: float = dfield("Initial time", default=0.0)
-    t1: float = dfield("Final time", default=1.0)
-    tn: int = dfield("Number of time steps", default=None)
-    dt: float = dfield("Delta time", default=None)
-    t: jnp.ndarray = dfield("Time vector", default=None)
-    solver_library: str = dfield("Library solving our system of equations", default=None)
+    save: bool = dfield("", default=True)
+    xloads: dict | Dxloads = dfield("", default=None)
+    aero: dict | Daero = dfield("", default=None)
+    t0: float = dfield("", default=0.0)
+    t1: float = dfield("", default=1.0)
+    tn: int = dfield("", default=None)
+    dt: float = dfield("", default=None)
+    t: jnp.ndarray = dfield("", default=None, yaml_save=False)
+    solver_library: str = dfield("", default=None)
     solver_function: str = dfield(
-        "Name for the solver of the previously defined library", default=None
+        "", default=None
     )
-    solver_settings: str = dfield("Settings for the solver", default=None)
+    solver_settings: str = dfield("", default=None)
     q0treatment: int = dfield(
-        """Modal velocities, q1, and modal forces, q2, are the main variables
-        in the intrinsic structural description,
-        but the steady aerodynamics part needs a displacement component, q0;
-        proportional gain to q2 or  integration of velocities q1
-        can be used to obtain this.""",
+        "",
         default=2,
         options=[2, 1],
     )
     rb_treatment: int = dfield(
-        """Rigid-body treatment: 1 to use the first node quaternion to track the body
-        dynamics (integration of strains thereafter; 2 to use quaternions at every node.)""",
+        "",
         default=1,
         options=[1, 2],
     )
-    nonlinear: bool = dfield(
-        """whether to include the nonlinear terms in the eqs. (Gammas)
-        and in the integration""",
+    nonlinear: int = dfield(
+        "",
         default=1,
-        options=[1, 0, -1, -2],
+        options=[2, 1, 0, -1, -2],
     )
     residualise: bool = dfield(
-        "average the higher frequency eqs and make them algebraic", default=False
+        "", default=False
     )
-    residual_modes: int = dfield("number of modes to residualise", default=0)
-    label: str = dfield("""System label that maps to the solution functional""", default=None)
-    label_map: dict = dfield("""label dictionary assigning """, default=None)
+    residual_modes: int = dfield("", default=0)
+    label: str = dfield("", default=None)
+    label_map: dict = dfield("", default=None)
 
-    states: dict = dfield("""Dictionary with the state variables.""", default=None)
-    num_states: int = dfield("""Total number of states""", default=None)
+    states: dict = dfield("", default=None)
+    num_states: int = dfield("", default=None)
     init_states: dict[str:list] = dfield(
-        """Dictionary with initial conditions for each state""", default=None
+        "", default=None
     )
     init_mapper: dict[str:str] = dfield(
-        """Dictionary mapping states types to functions in initcond""",
+        "",
         default=dict(q1="velocity", q2="force"),
     )
-    ad: dict | DtoAD = dfield("""Dictionary for AD""", default=None)
-    shard: dict | DShard = dfield("""Dictionary for parallelisation""", default=None)
+    ad: dict | DtoAD = dfield("", default=None)
+    shard: dict | DShard = dfield("", default=None)
 
     def __post_init__(self):
         if self.t is not None:
-            object.__setattr__(self, "t1", self.t[-1])
+            object.__setattr__(self, "t", jnp.array(self.t))
+            object.__setattr__(self, "t1", float(self.t[-1]))
+            object.__setattr__(self, "t0", float(self.t[0]))
+            
             if (len_t := len(self.t)) < 2:
                 object.__setattr__(self, "dt", 0.0)
             else:
-                object.__setattr__(self, "dt", self.t[1] - self.t[0])
+                object.__setattr__(self, "dt", float(self.t[1]) - self.t0)
             object.__setattr__(self, "tn", len_t)
         else:
             if self.dt is not None and self.tn is not None:
@@ -1343,11 +1445,28 @@ class Dsystem(DataContainer):
                     ),
                 )
             if self.shard is not None:
-                object.__setattr__(self, "operationalmode", "ShardAD")
+                object.__setattr__(self, "operationalmode", "ADShard")
+                if isinstance(self.shard, dict):
+                    libsettings_class = globals()["DShard"]
+                    object.__setattr__(
+                        self,
+                        "shard",
+                        initialise_Dclass(
+                            self.shard,
+                            libsettings_class,
+                            #_fem=self._fem,
+                            #_aero=self._aero,
+                        ),
+                    )
+                
             else:
                 object.__setattr__(self, "operationalmode", "AD")
+                
         elif self.shard is not None:
-            object.__setattr__(self, "operationalmode", "Shard")            
+            if self.operationalmode == "":
+                object.__setattr__(self, "operationalmode", "Shard")
+            else:
+                object.__setattr__(self, "operationalmode", self.operationalmode.capitalize())
             if isinstance(self.shard, dict):
                 libsettings_class = globals()["DShard"]
                 object.__setattr__(
@@ -1360,29 +1479,19 @@ class Dsystem(DataContainer):
                         #_aero=self._aero,
                     ),
                 )
-                
+        elif self.operationalmode == "fast":
+            object.__setattr__(self, "operationalmode", "Fast")
         if self.label is None:
             self.build_label()
         self._initialize_attributes()
 
     def build_states(self, num_modes: int, num_nodes: int):
-        tracker = StateTrack()
-        # TODO: keep upgrading/ add residualise
-        if self.solution == "static" or self.solution == "staticAD":
-            tracker.update(q2=num_modes)
-            if self.target.lower() == "trim":
-                tracker.update(qx=1)
-        elif self.solution == "dynamic" or self.solution == "dynamicAD":
-            tracker.update(q1=num_modes, q2=num_modes)
-            if self.label_map["aero_sol"] and self.aero.approx.lower() == "roger":
-                tracker.update(ql=self.aero.num_poles * num_modes)
-            if self.q0treatment == 1:
-                tracker.update(q0=num_modes)
-            if self.bc1.lower() != "clamped":
-                if self.rb_treatment == 1:
-                    tracker.update(qr=4)
-                elif self.rb_treatment == 2:
-                    tracker.update(qr=4 * num_nodes)
+        
+        num_poles = 0
+        if self.label_map["aero_sol"] and self.aero.approx.lower() == "roger":
+            num_poles = self.aero.num_poles
+        tracker = iutils.build_systemstates(self.solution, self.target, self.bc1, self.rb_treatment, self.q0treatment, num_poles, num_modes, num_nodes)
+    
         # if self.solution == "static":
         #     state_dict.update(m, kwargs)
         object.__setattr__(self, "states", tracker.states)
@@ -1444,6 +1553,8 @@ class Dsystem(DataContainer):
             lmap["nonlinear"] = "l"
         elif self.nonlinear == -2:
             lmap["nonlinear"] = "L"
+        elif self.nonlinear == 2:
+            lmap["nonlinear"] = "gamma1"            
         if self.residualise:
             lmap["residualise"] = "r"
         else:
@@ -1511,6 +1622,109 @@ class Dsystems(DataContainer):
         self._initialize_attributes()
 
 
+@Ddataclass
+class Dconstraint(DataContainer):
+
+    type_name: str = dfield("", default="spherical")
+    node: int = dfield("", default=None)
+    body: str = dfield("", default=None)
+    node_father: int = dfield("", default=None)
+    body_father: str = dfield("", default=None)    
+    axis: jnp.ndarray = dfield("", default=None)
+    
+    def __post_init__(self):
+        self._initialize_attributes()
+        
+@Ddataclass
+class Dmultibody(DataContainer):
+
+    num_bodies: int = dfield("", default=0)
+    num_constraints: int = dfield("", default=0)    
+    name_bodies: list[str] = dfield("", default=None)
+    fems: dict[str: Dfem] = dfield("", default=None)
+    fems_input: dict =dfield("", default=None, yaml_save=False)
+    systems: dict[str: Dsystem] = dfield("", default=None)
+    systems_input: dict = dfield("", default=None, yaml_save=False)
+    constraints: dict[str: Dconstraint] = dfield("", default=None)
+    constraints_input: dict = dfield("", default=None)
+    states_global: dict = dfield("", default=None)
+    states_system: dict = dfield("", default=None)
+    
+    def __post_init__(self):
+        object.__setattr__(self, "fems", dict())
+        object.__setattr__(self, "systems", dict())
+        object.__setattr__(self, "constraints", dict())
+        for k, v in self.fems_input.items():
+            self.fems[k] = Dfem(**v)
+        for k, v in self.systems_input.items():            
+            self.systems[k] = Dsystem(**v, _fem=self.fems[k])
+        for k, v in self.constraints_input.items():            
+            self.constraints[k] = Dconstraint(**v)
+        self._initialize_attributes()
+
+    def build_states(self, fem0: Dfem, system0: Dsystem):
+        # TODO: ALL
+        states_global = dict()
+        states_system = dict()
+        num_modes = fem0.num_modes
+        num_nodes = fem0.num_nodes
+        num_poles = 0
+        if system.label_map["aero_sol"] and system.aero.approx.lower() == "roger":
+            num_poles = system.aero.num_poles
+        tracker = iutils.build_systemstates(system.solution, system.target, system.bc1, system.rb_treatment, system.q0treatment, num_poles, num_modes, num_nodes)
+        states_system['b0'] = tracker.states
+        states_global = iutils.StateTrack()
+        states_global.update()
+        # if self.solution == "static":
+        #     state_dict.update(m, kwargs)
+        object.__setattr__(self, "states", tracker.states)
+        object.__setattr__(self, "num_states", tracker.num_states)
+        
+        
+class ForagerinputType(Enum):
+    SHARD2ADGUST= 1
+        
+@Ddataclass
+class Dforager(Dlibrary):
+
+    typeof: str = dfield("Type of forager",
+                         default=None,
+                         options=ForagerinputType._member_names_)
+    settings: dict = dfield("", default=None)
+    
+    def __post_init__(self):
+        libsettings_class = globals()[f"Dforager_{self.typeof}"]
+        object.__setattr__(
+            self,
+            "settings",
+            initialise_Dclass(
+                self.settings,
+                libsettings_class
+            ),
+        )
+        
+        self._initialize_attributes()
+
+@Ddataclass
+class Dforager_shard2adgust(DataContainer):
+
+    gathersystem_name: str = dfield("", default=None)
+    scattersystems_name: str = dfield("", default=None)
+    ad: dict = dfield("", default=None)
+    
+    def __post_init__(self):
+        # libsettings_class = globals()["DtoAD"]
+        # object.__setattr__(
+        #     self,
+        #     "ad",
+        #     initialise_Dclass(
+        #         self.ad,
+        #         libsettings_class,
+        #             ),
+        #         )
+        
+        self._initialize_attributes()
+        
 def generate_docstring(cls: Any) -> Any:
     """
     Generate a docstring for a data class based on its fields.
@@ -1520,8 +1734,9 @@ def generate_docstring(cls: Any) -> Any:
 
     lines = [f"{cls.__name__}:\n"]
     for field in fields(cls):
-        field_type = field.type.__name__ if hasattr(field.type, "__name__") else str(field.type)
-        lines.append(f"    {field.name} : {field_type}")
+        field_type = field.type.__name__ if hasattr(field.type,
+                                                    "__name__") else str(field.type)
+        lines.append(f"{field.name} : {field_type}")
         # Here you could add more detailed documentation for each field if needed
     cls.__doc__ = "\n".join(lines)
     return cls
