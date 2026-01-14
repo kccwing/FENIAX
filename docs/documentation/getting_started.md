@@ -86,7 +86,7 @@ conda activate feniax
 
 Thus a typical installation would comprise of these 4 steps:
 ```
-conda create -n feniax.python=3.11
+conda create -n feniax python=3.11
 conda activate feniax
 pip install -e .[all]
 pytest
