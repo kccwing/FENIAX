@@ -68,7 +68,7 @@ inp.systems.sett.s1.dt = 0.0001
 ```
 
 ### Solver settings
-A number of different solvers are available. A Runge-Kutta routine is available via "runge_kutta"; for the [_Diffrax_]([https://doi.org/10.2514/6.2024-2258](https://docs.kidger.site/diffrax) library use "diffrax".
+A number of different solvers are available. A Runge-Kutta routine is available via "runge_kutta"; for the [_Diffrax_](https://docs.kidger.site/diffrax) library use "diffrax".
 
 ``` python
 inp.systems.sett.s1.solver_library = "diffrax" #
