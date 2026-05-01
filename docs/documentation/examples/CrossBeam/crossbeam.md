@@ -99,4 +99,69 @@ config =  configuration.Config(inp)
 sol = feniax.feniax_main.main(input_obj=config)
 ```
 
+## Postprocessing
+Here we wish to extract the position and velocity of all beam nodes into csv files; `feniax.preprocessor.solution.IntrinsicReader` is used to load the solution and `feniax.plotools.utils.pickIntrinsic2D` is used to extract the requested data and return arrays.
 
+``` python
+import os
+import numpy as np
+import feniax.plotools.utils as putils
+import feniax.preprocessor.solution as solution
+
+sol0 = solution.IntrinsicReader("./results_m1")
+
+route_test_dir = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
+route_export = os.path.join(route_test_dir, "csvoutput")
+os.makedirs(route_export, exist_ok=True)
+
+
+def export_data(x_data, y_data, axis, route_export, file_prefix):
+    n_nodes = y_data.shape[axis]
+
+    for node_idx in range(n_nodes):
+        x, y = putils.pickIntrinsic2D(
+            x_data,
+            y_data,
+            fixaxis2=dict(node=node_idx, dim=axis)
+        )
+
+        dest_file = os.path.join(route_export, f"{file_prefix}_node_{node_idx}.txt")
+        np.savetxt(
+            dest_file,
+            np.column_stack((x, y)),
+            delimiter=","
+        )
+
+        print(f"Saved {file_prefix} node {node_idx} to {dest_file}")
+
+    y_all = y_data[:, axis, :]
+    out = np.column_stack((x_data, y_all))
+
+    dest_file = os.path.join(route_export, f"{file_prefix}_all_nodes.txt")
+    np.savetxt(dest_file, out, delimiter=",")
+
+    print(f"Saved all nodes to {dest_file}")
+```
+
+### Export csv files
+And hence the calls are made as such to extract first the velocities then the positions, in the z-direction, as below.
+
+``` python
+x_data = sol0.data.dynamicsystem_s1.t
+
+export_data(
+    x_data,
+    sol0.data.dynamicsystem_s1.X1,
+    2,
+    route_export,
+    "vel_z"
+)
+
+export_data(
+    x_data,
+    sol0.data.dynamicsystem_s1.ra,
+    2,
+    route_export,
+    "pos_z"
+)
+```
