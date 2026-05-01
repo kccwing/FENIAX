@@ -46,6 +46,7 @@ from tabulate import tabulate
 ```
 
 ## Run cases
+Here we define functions for running FENIAX and recording runtimes.
 
 ``` python
 
@@ -72,8 +73,11 @@ def save_times():
     pd_times.to_csv("./run_times.csv")
 ```
 
-``` {#wingSP .python}
+### Run cases
 
+<!---
+# commented out for clarity - baseline case is WSP1
+``` {#wingSP .python}
 wingSP_folder = feniax.PATH / "../examples/wingSP"
 inp = Inputs()
 inp.engine = "intrinsicmodal"
@@ -128,6 +132,8 @@ dts = [round(1./ eigenvals[i]**0.5, 6) for i in [5,15,30,50,100]]
 print(dts)
 dts = [round(1./ eigenvals[i]**0.5, 2) for i in [5,15,30,50,100]]
 ```
+-->
+
 
 WSP1
 
